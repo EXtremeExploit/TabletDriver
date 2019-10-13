@@ -1,4 +1,4 @@
-#include "stdafx.h"
+#include "precompiled.h"
 #include "Vector2D.h"
 
 //
@@ -80,5 +80,11 @@ double Vector2D::Angle(Vector2D target) {
 void Vector2D::LerpAdd(Vector2D target, double t) {
 	x += (target.x - x) * t;
 	y += (target.y - y) * t;
+}
+
+void Vector2D::LerpAdd2D(Vector2D target, double tx, double ty)
+{
+	x += (target.x - x) * tx;
+	y += (target.y - y) * ty;
 }
 

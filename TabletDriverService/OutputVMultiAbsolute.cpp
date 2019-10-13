@@ -1,4 +1,4 @@
-#include "stdafx.h"
+#include "precompiled.h"
 #include "OutputVMultiAbsolute.h"
 
 #define LOG_MODULE "VMultiAbsolute"
@@ -10,12 +10,24 @@
 //
 OutputVMultiAbsolute::OutputVMultiAbsolute() {
 
-	// Absolute mouse vmulti report
-	report.vmultiId = 0x40;
+	// Absolute mouse VMulti report
 	report.reportLength = 7;
-	report.reportId = 3;
 	report.buttons = 0;
+	report.x = 0;
+	report.y = 0;
 	report.wheel = 0;
+
+	// XP-Pen
+	if(vmulti->type == VMulti::TypeXPPen) {
+		report.vmultiId = 0x40;
+		report.reportId = 3;
+	}
+
+	// VEIKK
+	else if(vmulti->type == VMulti::TypeVEIKK) {
+		report.vmultiId = 0x09;
+		report.reportId = 1;
+	}
 
 }
 
@@ -36,7 +48,10 @@ bool OutputVMultiAbsolute::Set(TabletState *tabletState) {
 	double y = tabletState->position.y;
 
 	// Map position to virtual screen (values between 0 and 1)
-	mapper->GetScreenPosition(&x, &y);
+	bool mapValid = mapper->GetScreenPosition(&x, &y);
+	if(!mapValid) {
+		return false;
+	}
 
 	report.buttons = tabletState->buttons;
 	report.x = (USHORT)round(x * 32767.0);
@@ -56,7 +71,7 @@ bool OutputVMultiAbsolute::Write() {
 	if(vmulti->HasReportChanged()) {
 
 		// Debug message
-		if(logger.debugEnabled) {
+		if(logger.IsDebugOutputEnabled()) {
 			LOG_DEBUGBUFFER(&report, 9, "Report: ");
 		}
 

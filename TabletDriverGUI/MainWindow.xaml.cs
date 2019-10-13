@@ -1,18 +1,16 @@
-﻿using Microsoft.Win32;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Ink;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Shapes;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 
 namespace TabletDriverGUI
@@ -24,7 +22,7 @@ namespace TabletDriverGUI
     {
 
         // Version
-        public string Version = "0.2.1";
+        public string Version = "0.2.4";
 
         // Console stuff
         private List<string> commandHistory;
@@ -37,48 +35,21 @@ namespace TabletDriverGUI
         // Driver
         private TabletDriver driver;
         private Dictionary<String, String> driverCommands;
+        private List<string> settingCommands;
         private bool running;
-
+        private int tabletButtonCount;
 
         // Timers
         private DispatcherTimer timerStatusbar;
         private DispatcherTimer timerRestart;
         private DispatcherTimer timerConsoleUpdate;
+        private DispatcherTimer timerUpdatePenPositions;
 
         // Config
         private Configuration config;
         private string configFilename;
         private bool isFirstStart = false;
         private bool isLoadingSettings;
-
-        // Screen map canvas elements
-        private Rectangle[] rectangleMonitors;
-        private Rectangle rectangleDesktop;
-        private Rectangle rectangleScreenMap;
-        private TextBlock textScreenAspectRatio;
-
-        // Tablet area canvas elements
-        private Polygon polygonTabletFullArea;
-        private Polygon polygonTabletArea;
-        private Polygon polygonTabletAreaArrow;
-        private TextBlock textTabletAspectRatio;
-
-        // Mouse drag
-        private class MouseDrag
-        {
-            public bool IsMouseDown;
-            public object Source;
-            public Point OriginMouse;
-            public Point OriginDraggable;
-            public MouseDrag()
-            {
-                IsMouseDown = false;
-                Source = null;
-                OriginMouse = new Point(0, 0);
-                OriginDraggable = new Point(0, 0);
-            }
-        }
-        MouseDrag mouseDrag;
 
         // Measurement to area
         private bool isEnabledMeasurementToArea = false;
@@ -124,14 +95,16 @@ namespace TabletDriverGUI
             notifyIcon.ContextMenu.MenuItems[0].Enabled = false;
 
             notifyIcon.Text = "";
-            notifyIcon.DoubleClick += NotifyIcon_DoubleClick;
-            notifyIcon.Click += NotifyIcon_DoubleClick;
+            notifyIcon.MouseClick += NotifyIcon_Click;
             notifyIcon.Visible = true;
             IsRealExit = false;
 
             // Create command history list
             commandHistory = new List<string> { "" };
             commandHistoryIndex = 0;
+
+            // Init setting commands list
+            settingCommands = new List<string>();
 
             // Init tablet driver
             driver = new TabletDriver("TabletDriverService.exe");
@@ -171,34 +144,24 @@ namespace TabletDriverGUI
 
 
             //
-            // Buttom Map ComboBoxes
+            // Hide tablet button mapping
             //
-            comboBoxButton1.Items.Clear();
-            comboBoxButton2.Items.Clear();
-            comboBoxButton3.Items.Clear();
-            comboBoxButton1.Items.Add("Disable");
-            comboBoxButton2.Items.Add("Disable");
-            comboBoxButton3.Items.Add("Disable");
-            for (int i = 1; i <= 5; i++)
-            {
-                comboBoxButton1.Items.Add("Mouse " + i);
-                comboBoxButton2.Items.Add("Mouse " + i);
-                comboBoxButton3.Items.Add("Mouse " + i);
-            }
-            comboBoxButton1.SelectedIndex = 0;
-            comboBoxButton2.SelectedIndex = 0;
-            comboBoxButton3.SelectedIndex = 0;
+            groupBoxTabletButtons.Visibility = Visibility.Collapsed;
 
 
-            //
-            // Smoothing rate ComboBox
-            //
-            comboBoxSmoothingRate.Items.Clear();
-            for (int i = 1; i <= 8; i++)
+            // Ink canvas undo history
+            inkCanvasUndoHistory = new StrokeCollection();
+
+            // Ink canvas drawing attributes
+            inkCanvasDrawingAttributes = new DrawingAttributes
             {
-                comboBoxSmoothingRate.Items.Add((1000.0 / i).ToString("0") + " Hz");
-            }
-            comboBoxSmoothingRate.SelectedIndex = 3;
+                Width = 10,
+                Height = 10,
+                Color = Color.FromRgb(0x55, 0x55, 0x55),
+                StylusTip = StylusTip.Ellipse,
+                FitToCurve = false
+            };
+            inkCanvas.DefaultDrawingAttributes = inkCanvasDrawingAttributes;
 
             // Process command line arguments
             ProcessCommandLineArguments();
@@ -208,10 +171,6 @@ namespace TabletDriverGUI
             Loaded += MainWindow_Loaded;
             SizeChanged += MainWindow_SizeChanged;
 
-            //
-            // Allow input field events
-            //
-            isLoadingSettings = false;
         }
 
 
@@ -220,14 +179,18 @@ namespace TabletDriverGUI
         // Window is closing -> Stop driver
         private void MainWindow_Closing(object sender, System.ComponentModel.CancelEventArgs e)
         {
+            // Close tablet view
+            if (tabletView != null)
+                tabletView.Close();
+
+            // Hide notify icon
             notifyIcon.Visible = false;
-            try
-            {
-                config.Write(configFilename);
-            }
-            catch (Exception)
-            {
-            }
+
+            // Write configuration to XML file
+            try { config.Write(configFilename); }
+            catch (Exception) { }
+
+            // Stop driver
             StopDriver();
         }
 
@@ -245,44 +208,20 @@ namespace TabletDriverGUI
             }
             catch (Exception)
             {
-                driver.ConsoleAddText("New config created!");
+                driver.ConsoleAddLine("New config created!");
                 isFirstStart = true;
                 config = new Configuration();
             }
-            isLoadingSettings = true;
-            Width = config.WindowWidth;
-            Height = config.WindowHeight;
-            isLoadingSettings = false;
 
-
-            if (!config.DeveloperMode)
-            {
-            }
-
-
-            // Invalid config -> Set defaults
-            if (config.ScreenArea.Width == 0 || config.ScreenArea.Height == 0)
-            {
-                config.DesktopSize.Width = GetVirtualDesktopSize().Width;
-                config.DesktopSize.Height = GetVirtualDesktopSize().Height;
-                config.ScreenArea.Width = config.DesktopSize.Width;
-                config.ScreenArea.Height = config.DesktopSize.Height;
-                config.ScreenArea.X = 0;
-                config.ScreenArea.Y = 0;
-            }
+            // Create setting elements
+            CreateSettingElements();
 
             // Create canvas elements
             CreateCanvasElements();
 
-            // Load settings from configuration
-            LoadSettingsFromConfiguration();
+            // Initialize configuration
+            InitializeConfiguration();
 
-            // Update the settings back to the configuration
-            UpdateSettingsToConfiguration();
-
-
-            // Set run at startup
-            SetRunAtStartup(config.RunAtStartup);
 
             // Hide the window if the GUI is started as minimized
             if (WindowState == WindowState.Minimized)
@@ -290,8 +229,14 @@ namespace TabletDriverGUI
                 Hide();
             }
 
+            //
+            // Allow input field events
+            //
+            isLoadingSettings = false;
+
             // Start the driver
             StartDriver();
+
         }
 
 
@@ -302,10 +247,79 @@ namespace TabletDriverGUI
         {
 
             // Control + S -> Save settings
-            if (e.Key == Key.S && e.KeyboardDevice.Modifiers == ModifierKeys.Control)
+            if (e.KeyboardDevice.Modifiers == ModifierKeys.Control && e.Key == Key.S)
             {
                 SaveSettings(sender, null);
                 e.Handled = true;
+            }
+
+            // Control + R -> Restart driver
+            if (e.KeyboardDevice.Modifiers == ModifierKeys.Control && e.Key == Key.R)
+            {
+                RestartDriverClick(sender, null);
+                e.Handled = true;
+            }
+
+
+            // Control + I -> Import settings
+            if (e.KeyboardDevice.Modifiers == ModifierKeys.Control && e.Key == Key.I)
+            {
+                MainMenuClick(mainMenuImport, null);
+                e.Handled = true;
+            }
+
+            // Control + E -> Export settings
+            if (e.KeyboardDevice.Modifiers == ModifierKeys.Control && e.Key == Key.E)
+            {
+                MainMenuClick(mainMenuExport, null);
+                e.Handled = true;
+            }
+
+            //
+            // Move screen or tablet area with keys
+            //
+            if (canvasScreenMap.IsFocused || canvasTabletArea.IsFocused)
+            {
+                int deltaX = 0;
+                int deltaY = 0;
+
+                // Arrow keys to delta
+                if (e.Key == Key.Left)
+                    deltaX = -1;
+                else if (e.Key == Key.Right)
+                    deltaX = 1;
+                else if (e.Key == Key.Up)
+                    deltaY = -1;
+                else if (e.Key == Key.Down)
+                    deltaY = 1;
+                if (deltaX == 0 && deltaY == 0)
+                    return;
+
+                // Control + arrow -> 10x movement
+                if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+                {
+                    deltaX *= 10;
+                    deltaY *= 10;
+                }
+
+                // Screen map
+                if (canvasScreenMap.IsFocused)
+                {
+                    SetStatus("Sender: " + sender);
+                    config.SelectedScreenArea.X += deltaX;
+                    config.SelectedScreenArea.Y += deltaY;
+                    LoadSettingsFromConfiguration();
+                    e.Handled = true;
+                }
+
+                // Tablet area
+                else if (canvasTabletArea.IsFocused)
+                {
+                    config.SelectedTabletArea.X += deltaX;
+                    config.SelectedTabletArea.Y += deltaY;
+                    LoadSettingsFromConfiguration();
+                    e.Handled = true;
+                }
             }
 
         }
@@ -341,13 +355,22 @@ namespace TabletDriverGUI
 
         #region Notify icon stuff
 
-        // Notify icon double click -> show window
-        private void NotifyIcon_DoubleClick(object sender, EventArgs e)
+        //
+        // Notify icon click -> show window
+        //
+        private void NotifyIcon_Click(object sender, System.Windows.Forms.MouseEventArgs e)
         {
+            // Is not mouse left button?
+            if (e.Button != System.Windows.Forms.MouseButtons.Left)
+                return;
+
+            // Minimized -> Show window
             if (WindowState == WindowState.Minimized)
             {
                 NotifyShowWindow(sender, e);
             }
+
+            // Hide window
             else
             {
                 NotifyHideWindow(sender, e);
@@ -454,70 +477,6 @@ namespace TabletDriverGUI
 
 
 
-        #region Wacom / Draw area
-
-        //
-        // Wacom Area
-        //
-        private void ButtonWacomArea_Click(object sender, RoutedEventArgs e)
-        {
-            WacomArea wacom = new WacomArea();
-            wacom.textWacomLeft.Text = Utils.GetNumberString((config.TabletArea.X - config.TabletArea.Width / 2) * 100.0, "0");
-            wacom.textWacomRight.Text = Utils.GetNumberString((config.TabletArea.X + config.TabletArea.Width / 2) * 100.0, "0");
-
-            wacom.textWacomTop.Text = Utils.GetNumberString((config.TabletArea.Y - config.TabletArea.Height / 2) * 100.0, "0");
-            wacom.textWacomBottom.Text = Utils.GetNumberString((config.TabletArea.Y + config.TabletArea.Height / 2) * 100.0, "0");
-
-            wacom.ShowDialog();
-
-            // Set button clicked
-            if (wacom.DialogResult == true)
-            {
-                if (
-                    Utils.ParseNumber(wacom.textWacomLeft.Text, out double left) &&
-                    Utils.ParseNumber(wacom.textWacomRight.Text, out double right) &&
-                    Utils.ParseNumber(wacom.textWacomTop.Text, out double top) &&
-                    Utils.ParseNumber(wacom.textWacomBottom.Text, out double bottom)
-                )
-                {
-                    double width, height;
-                    width = right - left;
-                    height = bottom - top;
-                    config.ForceAspectRatio = false;
-                    config.ForceFullArea = false;
-                    config.TabletArea.X = (left + width / 2.0) / 100.0;
-                    config.TabletArea.Y = (top + height / 2.0) / 100.0;
-                    config.TabletArea.Width = width / 100.0;
-                    config.TabletArea.Height = height / 100.0;
-                    LoadSettingsFromConfiguration();
-                }
-                else
-                {
-                    MessageBox.Show("Invalid values!", "Wacom area error!", MessageBoxButton.OK, MessageBoxImage.Error);
-                }
-            }
-
-            wacom.Close();
-        }
-
-
-        //
-        // Draw area
-        //
-        private void ButtonDrawArea_Click(object sender, RoutedEventArgs e)
-        {
-            if (!isEnabledMeasurementToArea)
-            {
-                isEnabledMeasurementToArea = true;
-                driver.SendCommand("Measure 2");
-                SetStatus("Click the top left and the bottom right corners of the area with your tablet pen!");
-                buttonDrawArea.IsEnabled = false;
-            }
-        }
-
-        #endregion
-
-
 
         #region WndProc
 
@@ -554,11 +513,13 @@ namespace TabletDriverGUI
         }
 
 
-
-
-
         #endregion
 
+
+        private void MouseTest(object sender, MouseButtonEventArgs e)
+        {
+            SetStatus("Event: " + e.RoutedEvent.ToString() + ", Mouse at " + ((UIElement)sender).ToString() + "! " + e.ChangedButton.ToString() + " " + e.ButtonState.ToString());
+        }
 
     }
 }

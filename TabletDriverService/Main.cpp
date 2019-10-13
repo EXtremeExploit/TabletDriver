@@ -1,13 +1,12 @@
-#include "stdafx.h"
+#include "precompiled.h"
 
 #include <csignal>
 
-#include "HIDDevice.h"
-#include "USBDevice.h"
 #include "VMulti.h"
 #include "Tablet.h"
-#include "ScreenMapper.h"
 #include "CommandLine.h"
+#include "DataFormatter.h"
+#include "NamedPipeInput.h"
 
 #define LOG_MODULE ""
 #include "Logger.h"
@@ -15,6 +14,8 @@
 #pragma comment(lib, "hid.lib")
 #pragma comment(lib, "setupapi.lib")
 #pragma comment(lib, "winusb.lib")
+#pragma comment(lib, "winmm.lib")
+#pragma comment(lib, "ntdll.lib")
 
 
 // Global variables...
@@ -25,25 +26,35 @@ CommandHandler *commandHandler;
 OutputManager *outputManager;
 ScreenMapper *mapper;
 
+// Named pipes
+NamedPipeInput *pipeInput;
+NamedPipeServer *pipeOutput;
+NamedPipeState *pipeState;
+
 void InitConsole();
 bool ProcessCommand(CommandLine *cmd);
+bool cleanupStarted = false;
+void RunCleanupAndExit(int code);
+
 
 //
 // Main
 //
 int main(int argc, char**argv) {
-	string line;
-	string filename;
+	std::string line;
+	std::string filename;
 	CommandLine *cmd;
-	bool running = false;
 
 	// Init global variables
 	vmulti = NULL;
 	tablet = NULL;
 	tabletHandler = NULL;
-	
+
 	// Init console
 	InitConsole();
+
+	// Initialize COM library (Volume control)
+	CoInitializeEx(NULL, COINIT_MULTITHREADED);
 
 	// Tablet handler
 	tabletHandler = new TabletHandler();
@@ -54,10 +65,7 @@ int main(int argc, char**argv) {
 
 	// Screen mapper
 	mapper = new ScreenMapper(tablet);
-	mapper->SetRotation(0);
-
-	// Output manager
-	outputManager = new OutputManager();
+	mapper->primaryMap->SetRotation(0);
 
 	//
 	// Command: Start
@@ -66,24 +74,26 @@ int main(int argc, char**argv) {
 	//
 	commandHandler->AddCommand(new Command("Start", [&](CommandLine *cmd) {
 
-		if(running) {
+		if (tabletHandler->IsRunning()) {
 			LOG_INFO("Driver is already started!\n");
 			return true;
 		}
 
 		// Unknown tablet
-		if(tablet == NULL) {
+		if (tablet == NULL) {
 			LOG_ERROR("Tablet not found!\n");
-			CleanupAndExit(1);
+			CleanupAndExit(0);
+			return false;
 		}
 
 		// Tablet init
-		if(!tablet->Init()) {
+		if (!tablet->Init()) {
 			LOG_ERROR("Tablet init failed!\n");
 			LOG_ERROR("Possible fixes:\n");
 			LOG_ERROR("1) Uninstall other tablet drivers.\n");
 			LOG_ERROR("2) Stop other tablet driver services.\n");
-			CleanupAndExit(1);
+			CleanupAndExit(0);
+			return false;
 		}
 
 		// Set screen mapper tablet
@@ -93,9 +103,6 @@ int main(int argc, char**argv) {
 		tabletHandler->tablet = tablet;
 		tabletHandler->Start();
 
-		// Set running state
-		running = true;
-
 		LOG_INFO("TabletDriver started!\n");
 		commandHandler->ExecuteCommand("Status");
 
@@ -103,8 +110,9 @@ int main(int argc, char**argv) {
 	}));
 
 	//
-	// Command: Exit
+	// Command: Exit, Quit
 	//
+	commandHandler->AddAlias("Quit", "Exit");
 	commandHandler->AddCommand(new Command("Exit", [&](CommandLine *cmd) {
 		LOG_INFO("Bye!\n");
 		CleanupAndExit(0);
@@ -112,66 +120,114 @@ int main(int argc, char**argv) {
 	}));
 
 
-	// Logger
-	//LOGGER_DIRECT = true;
+	// Start logger
 	LOGGER_START();
 
-	// VMulti Device
-	vmulti = new VMulti();
-	if(!vmulti->isOpen) {
+
+	// Named pipes
+	if (argc > 2) {
+		pipeInput = new NamedPipeInput(std::string(argv[2]) + std::string("Input"));
+		pipeOutput = new NamedPipeServer(std::string(argv[2]) + std::string("Output"));
+		pipeState = new NamedPipeState(std::string(argv[2]) + std::string("State"));
+	}
+	else {
+		pipeInput = new NamedPipeInput("TabletDriverInput");
+		pipeOutput = new NamedPipeServer("TabletDriverOutput");
+		pipeState = new NamedPipeState("TabletDriverState");
+	}
+	pipeInput->Start();
+	pipeOutput->Start();
+	pipeState->Start();
+
+	// Logger output pipe
+	logger.writeCallback = [&](void *buffer, int length) {
+		if (pipeOutput != NULL && pipeOutput->IsRunning()) {
+			pipeOutput->Write(buffer, length);
+		}
+	};
+	//logger.namedPipe = pipeOutput;
+
+	// VMulti XP-Pen
+	vmulti = new VMulti(VMulti::TypeXPPen);
+
+	// VMulti VEIKK
+	if (!vmulti->isOpen) {
+		LOG_ERROR("Can't open XP-Pen's VMulti! Trying VEIKK's VMulti!\n");
+		delete vmulti;
+		vmulti = new VMulti(VMulti::TypeVEIKK);
+	}
+
+	if (!vmulti->isOpen) {
 		LOG_ERROR("Can't open VMulti device!\n\n");
 		LOG_ERROR("Possible fixes:\n");
 		LOG_ERROR("1) Install VMulti driver\n");
 		LOG_ERROR("2) Kill PentabletService.exe (XP Pen driver)\n");
 		LOG_ERROR("3) Uninstall other tablet drivers and reinstall VMulti driver\n");
-		CleanupAndExit(1);
+		RunCleanupAndExit(0);
+		return 0;
 	}
+
+	// Output manager
+	outputManager = new OutputManager();
 
 	// Read init file
 	filename = "init.cfg";
 
-	if(argc > 1) {
+	if (argc > 1) {
 		filename = argv[1];
 	}
-	if(!commandHandler->ExecuteFile(filename)) {
+	if (!commandHandler->ExecuteFileLock(filename)) {
 		LOG_ERROR("Can't open '%s'\n", filename.c_str());
 	}
 
+	if (tablet != NULL) {
+		commandHandler->ExecuteCommandLock("RequestStartup");
+	}
+	else {
+		commandHandler->ExecuteCommandLock("CheckTablet");
+	}
+
+
 	//
-	// Main loop that reads input from the console.
+	// Main loop
 	//
-	while(true) {
+	while (true) {
 
 		// Broken pipe
-		if(!cin) break;
+		if (!std::cin) {
+			Sleep(100);
+		}
 
 		// Read line from the console
 		try {
-			getline(cin, line);
-		} catch(exception) {
-			break;
+			std::getline(std::cin, line);
+		}
+		catch (std::exception) {
+			Sleep(100);
+			//break;
 		}
 
 		// Process valid lines
-		if(line.length() > 0) {
+		if (line.length() > 0) {
+
+			// Line to command line
 			cmd = new CommandLine(line);
 
-			//
-			// Hide echo input 
-			//
-			if(cmd->is("Echo")) {
-				commandHandler->ExecuteCommand(cmd);
+			// Hide console (for the service only mode)
+			if (cmd->is("Hide")) {
+				::ShowWindow(::GetConsoleWindow(), SW_HIDE);
 			}
+
+			// Process all other commands
 			else {
 				ProcessCommand(cmd);
 			}
 
 			delete cmd;
 		}
-
 	}
 
-	CleanupAndExit(0);
+	RunCleanupAndExit(0);
 	return 0;
 }
 
@@ -180,25 +236,62 @@ int main(int argc, char**argv) {
 //
 // Cleanup and exit
 //
-void CleanupAndExit(int code) {
-	/*
-	if(tablet != NULL)
-		delete tablet;
-	if(vmulti != NULL)
-		delete vmulti;
-		*/
+void RunCleanupAndExit(int code) {
 
-		// Stop filter timer
-	if(tabletHandler != NULL) {
-		tabletHandler->StopTimer();
-	}
+	printf("Cleanup and exit %d\n", code);
 
-	// Reset output
-	if(outputManager != NULL) {
-		outputManager->Reset();
-	}
+	// Wait commands to go through
+	printf("Cleanup CommandHandler\n");
+	if(commandHandler != NULL)
+		delete commandHandler;
+		
+	// Wait for named pipe writes
+	Sleep(100);
 
+	// Stop logger
+	printf("Cleanup Logger\n");
+	logger.writeCallback = NULL;
 	LOGGER_STOP();
+
+	// Named pipes
+	printf("Cleanup Input Pipe\n");
+	if (pipeInput != NULL) {
+		delete pipeInput;
+	}
+	printf("Cleanup Output Pipe\n");
+	if (pipeOutput != NULL) {
+		delete pipeOutput;
+	}
+	printf("Cleanup State Pipe\n");
+	if (pipeState != NULL) {
+		delete pipeState;
+	}
+
+	// TabletHandler
+	printf("Cleanup TabletHandler\n");
+	if (tabletHandler != NULL) {
+		delete tabletHandler;
+	}
+
+	// OutputManager
+	printf("Cleanup OutputManager\n");
+	if (outputManager != NULL) {
+		delete outputManager;
+	}
+
+	// VMulti
+	printf("Cleanup VMulti\n");
+	if (vmulti != NULL)
+		delete vmulti;
+
+	// Tablet
+	printf("Cleanup Tablet\n");
+	if (tablet != NULL)
+		delete tablet;
+
+	// Uninitialize COM
+	CoUninitialize();
+
 	Sleep(500);
 
 	//printf("Press enter to exit...");
@@ -206,34 +299,48 @@ void CleanupAndExit(int code) {
 	exit(code);
 }
 
+// Cleanup thread
+void CleanupAndExit(int code) {
+	if (cleanupStarted) return;
+	cleanupStarted = true;
+
+	std::thread *t = new std::thread(RunCleanupAndExit, code);
+}
+
+
 
 //
 // Process Command
 //
 bool ProcessCommand(CommandLine *cmd) {
 
-	bool logResult = false;
+	// Invalid command
+	if (!cmd->isValid) return false;
 
-	LOG_INFO(">> %s\n", cmd->line.c_str());
+	// Hide echo input
+	if (cmd->is("Echo")) {}
+	else { LOG_INFO(">> %s\n", cmd->line.c_str()); }
 
 	//
 	// Execute command handler command
 	//
-	if(cmd->command.back() == '?') {
+	bool logResult = false;
+	if (cmd->command.back() == '?') {
 		logResult = true;
 		cmd->command.pop_back();
 	}
-	if(commandHandler->IsValidCommand(cmd->command)) {
-		bool result = commandHandler->ExecuteCommand(cmd->command, cmd);
-		if(logResult) {
+
+	// Command is valid?
+	if (commandHandler->IsValidCommand(cmd->command)) {
+		bool result = commandHandler->ExecuteCommandLock(cmd->command, cmd);
+		if (logResult) {
 			LOG_INFO("Result: %s\n", result ? "True" : "False");
 		}
 		return result;
 
 	}
-
 	// Unknown
-	else if(cmd->isValid) {
+	else if (cmd->isValid) {
 		LOG_WARNING("Unknown command: %s\n", cmd->line.c_str());
 	}
 

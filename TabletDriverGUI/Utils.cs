@@ -1,4 +1,6 @@
 ﻿using System.Globalization;
+using System.IO;
+using System.Runtime.Serialization.Formatters.Binary;
 
 namespace TabletDriverGUI
 {
@@ -35,6 +37,11 @@ namespace TabletDriverGUI
         {
             CheckCultureInfo();
             val = 0;
+
+            // Replace commas with dots
+            str = str.Replace(',', '.');
+
+            // Parse
             if (double.TryParse(str, NumberStyles.AllowDecimalPoint | NumberStyles.AllowLeadingSign, cultureInfo.NumberFormat, out double tmp))
             {
                 val = tmp;
@@ -56,5 +63,25 @@ namespace TabletDriverGUI
             CheckCultureInfo();
             return val.ToString(format, cultureInfo.NumberFormat);
         }
+
+
+
+
+        //
+        // RGB to hex string
+        //
+        public static string RGBToHex(byte r, byte g, byte b)
+        {
+            return string.Format("{0:X2}{1:X2}{2:X2}", r, g, b); ;
+        }
+
+        //
+        // RGB to color hex string
+        //
+        public static string RGBToHexColor(byte r, byte g, byte b)
+        {
+            return "#" + RGBToHex(r, g, b);
+        }
+
     }
 }

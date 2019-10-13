@@ -7,16 +7,19 @@
 #include <cstring>
 #include <ctime>
 
-
 #include <iostream>
 #include <iomanip>
 #include <sstream>
 #include <fstream>
 #include <vector>
+#include <queue>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
 
+#include <Windows.h>
+
+#include "Runnable.h"
 
 #ifndef LOG_MODULE
 #define LOG_MODULE "Logger"
@@ -25,7 +28,7 @@
 #define LOGGER_FILE(file) logger.OpenLogFile(file)
 #define LOGGER_START(...) logger.Start()
 #define LOGGER_STOP(...) logger.Stop()
-#define LOGGER_PROCESS(...) logger.ProcessMessages()
+#define LOGGER_PROCESS(...) logger.ProcessQueue()
 #define LOGGER_DIRECT logger.directPrint
 
 #define LOG_DIE(...)  (logger.LogMessage(logger.LogLevelCritical, LOG_MODULE,  __VA_ARGS__), LOGGER_PROCESS(); exit(1))
@@ -50,16 +53,16 @@
 #define LOG_DEBUGBUFFER(buf, len, ...) logger.LogBuffer(logger.LogLevelDebug, LOG_MODULE, buf, len, __VA_ARGS__)
 
 
-using namespace std;
-
-class Logger {
+class Logger : public Runnable {
 private:
-	thread threadLog;
+	std::thread threadLog;
 	void run();
-	mutex lockMessages;
-	bool newMessage;
-	ofstream logFile;
+	std::mutex lockQueue;
+	std::mutex lockNewItem;
+	std::condition_variable conditionNewItem;
+	std::ofstream logFile;
 	bool logToFile;
+	bool isDebugOutputEnabled;
 
 public:
 	enum LogLevels {
@@ -77,11 +80,12 @@ public:
 		tm time;
 		SYSTEMTIME systemTime;
 		int level;
-		string module;
-		string text;
+		std::string module;
+		std::string message;
 	} LogItem;
-	vector<LogItem> messages;
-	string levelNames[9] = {
+	std::queue<LogItem*> logQueue;
+
+	std::string levelNames[9] = {
 		"",
 		"",
 		"CRITICAL",
@@ -92,22 +96,28 @@ public:
 		"INFO",
 		"DEBUG"
 	};
-	bool isRunning;
 	bool directPrint;
-	bool debugEnabled;
-	string logFilename = "";
+	std::string logFilename = "";
+	std::function<void(void *buffer, int length)> writeCallback = NULL;
+	std::mutex lock;
 
-	void OutputMessage(LogItem *message);
-	void ProcessMessages();
-	void LogMessage(int level, string module, const char *fmt, ...);
-	void LogBuffer(int level, string module, void *buffer, int length, const char *fmt, ...);
+	void OutputItem(LogItem *item);
+	void ProcessQueue();
+	void LogMessage(int level, std::string module, const char *fmt, ...);
+	void LogBuffer(int level, std::string module, void *buffer, int length, const char *fmt, ...);
 	int verbosity;
 	Logger();
-	void AddMessage(LogItem *message);
+	void AddQueue(LogItem *item);
+	void NotifyNewItem();
+	void WaitNewItem();
 	void Start();
 	void Stop();
-	bool OpenLogFile(string filename);
+	bool OpenLogFile(std::string filename);
 	bool CloseLogFile();
+
+	void SetDebugOutput(bool enabled);
+	bool IsDebugOutputEnabled();
+
 };
 extern Logger logger;
 

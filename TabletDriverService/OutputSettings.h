@@ -12,17 +12,19 @@ public:
 	} PixelPosition;
 
 	struct {
+		bool firstPosition;
 		PixelPosition pixelPosition;
 		Vector2D targetPosition;
 		Vector2D lastPosition;
-		chrono::high_resolution_clock::time_point lastTime;
+		std::chrono::high_resolution_clock::time_point lastTime;
 	} relativeState;
 
-	double relativeSensitivity;
+	Vector2D relativeSensitivity;
 	double relativeResetDistance;
 	double relativeResetTime;
+	bool relativeDragMove;
 
-	void ResetRelativeState(double x, double y, chrono::high_resolution_clock::time_point time);
+	void ResetRelativeState(double x, double y, std::chrono::high_resolution_clock::time_point time);
 
 	OutputSettings();
 	~OutputSettings();

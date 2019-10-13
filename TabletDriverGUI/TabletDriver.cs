@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Timers;
+using System.Text;
+using System.Runtime.InteropServices;
 
 namespace TabletDriverGUI
 {
@@ -41,14 +43,63 @@ namespace TabletDriverGUI
         public bool HasConsoleUpdated;
         private readonly int ConsoleMaxLines;
         private System.Threading.Mutex mutexConsoleUpdate;
-        private Dictionary<String, String> commands;
+        private Dictionary<string, string> commands;
+        public Dictionary<string, string> Commands { get { return commands; } }
+
+        // Pipe stuff
+        NamedPipeClient pipeInput;
+        NamedPipeClient pipeOutput;
+        NamedPipeClient pipeState;
+        byte[] stateBytes;
+        StringBuilder messageBuilder;
+
+
+        [StructLayout(LayoutKind.Sequential, Pack = 4, CharSet = CharSet.Unicode)]
+        [Serializable]
+        public struct TabletState
+        {
+            public int index;
+
+            public int inputButtons;
+            public double inputX;
+            public double inputY;
+            public double inputPressure;
+            public double inputVelocity;
+
+            public int outputButtons;
+            public double outputX;
+            public double outputY;
+            public double outputPressure;
+        }
+        public TabletState tabletState;
+
 
         // Other variables
         private readonly string servicePath;
         private Process processService;
         private Timer timerWatchdog;
         private bool running;
-        public bool IsRunning { get { return running; } }
+        private readonly object locker = new object();
+
+        public bool DoNotKill;
+
+        public bool IsRunning
+        {
+            get
+            {
+                lock (locker)
+                {
+                    return running;
+                }
+            }
+            set
+            {
+                lock (locker)
+                {
+                    running = value;
+                }
+            }
+        }
 
         //
         // Constructor
@@ -56,7 +107,8 @@ namespace TabletDriverGUI
         public TabletDriver(string servicePath)
         {
             this.servicePath = servicePath;
-            this.processService = null;
+            processService = null;
+            DoNotKill = false;
             timerWatchdog = new Timer(2000);
             timerWatchdog.Elapsed += TimerWatchdog_Elapsed;
 
@@ -66,14 +118,37 @@ namespace TabletDriverGUI
 
             commands = new Dictionary<string, string>();
 
+            messageBuilder = new StringBuilder();
+
+            pipeInput = new NamedPipeClient("TabletDriverOutput");
+            pipeOutput = new NamedPipeClient("TabletDriverInput");
+            pipeState = new NamedPipeClient("TabletDriverState");
+
+            stateBytes = new byte[Marshal.SizeOf(typeof(TabletState))];
+            pipeInput.MessageReceived += PipeInput_MessageReceived;
+            pipeState.MessageReceived += PipeState_MessageReceived;
+
+            pipeInput.Connected += (snd, e) => { pipeInput.WriteMessage("\n"); };
+            pipeOutput.Connected += (snd, e) =>
+            {
+                pipeOutput.WriteMessage("\n");
+            };
+            pipeState.Connected += (snd, e) => { pipeState.WriteMessage("\n"); };
+
+
+            // Invoke driver started event
+            Started?.Invoke(this, new EventArgs());
+
+
         }
+
 
         //
         // Driver watchdog
         //
         private void TimerWatchdog_Elapsed(object sender, ElapsedEventArgs e)
         {
-            if (running)
+            if (IsRunning)
             {
                 //Console.WriteLine("ID: " + processDriver.Id);
                 if (processService.HasExited)
@@ -83,14 +158,17 @@ namespace TabletDriverGUI
                 }
 
                 processService.Refresh();
-                switch(processService.PriorityClass)
+                if (processService != null && !processService.HasExited)
                 {
-                    case ProcessPriorityClass.High:
-                    case ProcessPriorityClass.RealTime:
-                        break;
-                    default:
-                        RaiseError("TabletDriverService priority too low! Run the GUI as an administrator or change the priority to high!");
-                        break;
+                    switch (processService.PriorityClass)
+                    {
+                        case ProcessPriorityClass.High:
+                        case ProcessPriorityClass.RealTime:
+                            break;
+                        default:
+                            RaiseError("TabletDriverService priority too low! Run the GUI as an administrator or change the priority to high!");
+                            break;
+                    }
                 }
             }
         }
@@ -98,26 +176,40 @@ namespace TabletDriverGUI
         //
         // Send command to the driver service
         //
-        public void SendCommand(string line)
+        public void SendCommand(string command)
         {
-            if (running)
-                processService.StandardInput.WriteLine(line);
+            if (IsRunning)
+            {
+
+                if (pipeOutput.IsRunning)
+                {
+                    pipeOutput.WriteMessage(command);
+                }
+                else
+                {
+                    processService.StandardInput.WriteLine(command);
+                }
+            }
         }
 
         //
         // Add text to console
         //
-        public void ConsoleAddText(string line)
+        public void ConsoleAddLine(string line)
         {
-            mutexConsoleUpdate.WaitOne();
-            ConsoleBuffer.Add(line);
-            HasConsoleUpdated = true;
+            try
+            {
+                mutexConsoleUpdate.WaitOne();
+                ConsoleBuffer.Add(line);
+                HasConsoleUpdated = true;
 
-            // Limit console buffer size
-            if (ConsoleBuffer.Count >= ConsoleMaxLines)
-                ConsoleBuffer.RemoveRange(0, ConsoleBuffer.Count - ConsoleMaxLines);
+                // Limit console buffer size
+                if (ConsoleBuffer.Count >= ConsoleMaxLines)
+                    ConsoleBuffer.RemoveRange(0, ConsoleBuffer.Count - ConsoleMaxLines);
+            }
+            catch (Exception) { }
 
-            mutexConsoleUpdate.ReleaseMutex();
+            try { mutexConsoleUpdate.ReleaseMutex(); } catch (Exception) { }
         }
 
 
@@ -134,14 +226,13 @@ namespace TabletDriverGUI
             mutexConsoleUpdate.ReleaseMutex();
         }
 
-
         //
         // Command name complete
         //
         public string CompleteCommandName(string inputText, bool showCommands)
         {
             List<string> commandsFound = new List<string>();
-            string result = inputText;
+            string result = null;
 
             // Find commands
             foreach (var item in commands)
@@ -151,7 +242,7 @@ namespace TabletDriverGUI
                     commandsFound.Add(item.Value);
                 }
             }
-           
+
 
             // Only one command found
             if (commandsFound.Count == 1)
@@ -179,7 +270,7 @@ namespace TabletDriverGUI
                 int columns = (int)Math.Ceiling(100.0 / maxWidth);
                 int rows = (int)Math.Ceiling((double)commandsFound.Count / columns);
 
-                string[,] commandMatrix = new string[rows,columns];
+                string[,] commandMatrix = new string[rows, columns];
                 int row = 0;
                 int column = 0;
 
@@ -202,9 +293,10 @@ namespace TabletDriverGUI
                     }
                 }
 
-                for(row = 0; row < rows; row++) {
-                    if(row != 0)
-                    commandsString += "\r\n  | ";
+                for (row = 0; row < rows; row++)
+                {
+                    if (row != 0)
+                        commandsString += "\r\n  | ";
                     for (column = 0; column < columns; column++)
                     {
                         string commandString = commandMatrix[row, column];
@@ -218,9 +310,9 @@ namespace TabletDriverGUI
                 // Add commands to console output
                 if (showCommands)
                 {
-                    ConsoleAddText("");
-                    ConsoleAddText("Commands: ");
-                    ConsoleAddText(commandsString);
+                    ConsoleAddLine("");
+                    ConsoleAddLine("Commands: ");
+                    ConsoleAddLine(commandsString);
                 }
 
                 // Fill input text
@@ -287,31 +379,116 @@ namespace TabletDriverGUI
         //
         private void ProcessService_ErrorDataReceived(object sender, DataReceivedEventArgs e)
         {
-            ConsoleAddText("ERROR! " + e.Data);
+            ConsoleAddLine("ERROR! " + e.Data);
             ErrorReceived?.Invoke(this, new DriverEventArgs(DriverEventType.Error, e.Data, ""));
         }
 
         //
-        // Driver service data received
+        // Driver service standard output data received
         //
         private void ProcessService_OutputDataReceived(object sender, DataReceivedEventArgs e)
         {
             if (e.Data == null)
             {
-                if (running)
+                if (IsRunning)
                     Stop();
             }
             else
             {
-                string line = e.Data;
+                //ProcessDriverMessage(e.Data + "\n");
+            }
+        }
 
-                // Status line?
-                if (line.Contains("[STATUS]")) {
 
-                    // Parse status variable and value
-                    Match match = Regex.Match(line, "^.+\\[STATUS\\] ([^ ]+) (.*?)$");
-                    if (!match.Success) return;
+        //
+        // Received input pipe message
+        //
+        private void PipeInput_MessageReceived(object sender, NamedPipeClient.NamedPipeEventArgs e)
+        {
 
+            string stringMessage = Encoding.UTF8.GetString(e.Message.Data, 0, e.Message.Length);
+            //ConsoleAddLine("Pipe: '" + stringMessage + "'");
+            ProcessDriverMessage(stringMessage);
+
+        }
+
+        //
+        // Received state pipe message
+        //
+        private void PipeState_MessageReceived(object sender, NamedPipeClient.NamedPipeEventArgs e)
+        {
+            GCHandle gcHandle;
+            TabletState readState;
+
+            // Convert bytes to TabletState
+            if (e.Message.Length == stateBytes.Length)
+            {
+                gcHandle = GCHandle.Alloc(e.Message.Data, GCHandleType.Pinned);
+                readState = (TabletState)Marshal.PtrToStructure(gcHandle.AddrOfPinnedObject(), typeof(TabletState));
+                gcHandle.Free();
+                tabletState = readState;
+            }
+        }
+
+
+        //
+        // Process driver message
+        //
+        private void ProcessDriverMessage(string messageData)
+        {
+            //ConsoleAddLine("Message data: '" + messageData + "'");
+
+            // Add message data to stringbuilder
+            messageBuilder.Append(messageData);
+
+
+            // Find a line
+            string line = "";
+            int index;
+            int startIndex = 0;
+            for (index = 0; index < messageBuilder.Length; index++)
+            {
+                char c = messageBuilder[index];
+                if (c == '\n')
+                {
+                    //ConsoleAddLine("New line at " + index);
+                    if (index > 0 && index > startIndex + 1)
+                    {
+                        line = messageBuilder.ToString(startIndex, index - startIndex + 1).Trim();
+                        ProcessDriverMessageLine(line);
+                        startIndex = index;
+                    }
+                }
+            }
+
+            // Remove lines from stringbuilder
+            if (startIndex < messageBuilder.Length)
+            {
+                messageBuilder.Remove(0, startIndex + 1);
+            }
+            else
+            {
+                messageBuilder.Clear();
+            }
+
+
+        }
+
+        //
+        // Process driver message line
+        //
+        private void ProcessDriverMessageLine(string line)
+        {
+            //ConsoleAddLine("Message line: '" + line + "'");
+
+            // Status line?
+            if (line.Contains("[STATUS]"))
+            {
+
+                // Parse status variable and value
+                Match match = Regex.Match(line, "^.+\\[STATUS\\] ([^ ]+) (.*?)$");
+                if (match.Success)
+                {
                     string variableName = match.Groups[1].ToString().ToLower();
                     string parameters = match.Groups[2].ToString();
 
@@ -336,14 +513,13 @@ namespace TabletDriverGUI
                     }
 
                     StatusReceived?.Invoke(this, new DriverEventArgs(DriverEventType.Status, variableName, parameters));
-
                 }
-
-
-                ConsoleAddText(e.Data);
-                MessageReceived?.Invoke(this, new DriverEventArgs(DriverEventType.Message, e.Data, ""));
             }
+
+            ConsoleAddLine(line);
+            MessageReceived?.Invoke(this, new DriverEventArgs(DriverEventType.Message, line, ""));
         }
+
 
         //
         // Start the driver service
@@ -397,10 +573,14 @@ namespace TabletDriverGUI
                     {
                     }
 
-                    running = true;
+                    IsRunning = true;
                     timerWatchdog.Start();
 
-                    Started?.Invoke(this, new EventArgs());
+                    // Named pipes
+                    pipeInput.Start();
+                    pipeOutput.Start();
+                    pipeState.Start();
+
                 }
 
                 // Start failed
@@ -423,19 +603,36 @@ namespace TabletDriverGUI
         //
         public void Stop()
         {
-            if (!running) return;
-            running = false;
+            if (!IsRunning) return;
             timerWatchdog.Stop();
+            IsRunning = false;
+
+            // Stop named pipe clients
+            pipeInput.Stop();
+            pipeOutput.Stop();
+            pipeState.Stop();
+
+
+            // Kill service process
+            Console.WriteLine("Killing TabletDriverService");
             try
             {
-                processService.CancelOutputRead();
-                processService.Kill();
-                processService.Dispose();
+                if (!DoNotKill)
+                {
+                    processService.CancelOutputRead();
+                    processService.Kill();
+                    processService.Dispose();
+                }
             }
-            catch (Exception)
+            catch (Exception e)
             {
+                Debug.WriteLine("Service process error! " + e.Message);
             }
+
             Stopped?.Invoke(this, new EventArgs());
+
+            System.Threading.Thread.Sleep(10);
+
         }
 
 

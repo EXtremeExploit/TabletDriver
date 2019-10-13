@@ -1,4 +1,4 @@
-#include "stdafx.h"
+#include "precompiled.h"
 #include "CommandHandler.h"
 
 #define LOG_MODULE ""
@@ -16,6 +16,10 @@ CommandHandler::CommandHandler() {
 // Destructor
 //
 CommandHandler::~CommandHandler() {
+
+	// Wait locked commands to finish
+	lock.lock();
+	lock.unlock();
 }
 
 
@@ -24,10 +28,10 @@ CommandHandler::~CommandHandler() {
 // Add command
 //
 bool CommandHandler::AddCommand(Command *command) {
-	string name = command->name;
-	transform(name.begin(), name.end(), name.begin(), ::tolower);
-	if(commands.count(name) <= 0) {
-		commands.insert(pair<string, Command*>(name, command));
+	std::string name = command->name;
+	std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+	if (commands.count(name) <= 0) {
+		commands.insert(std::pair<std::string, Command*>(name, command));
 		return true;
 	}
 	return false;
@@ -36,15 +40,15 @@ bool CommandHandler::AddCommand(Command *command) {
 //
 // Add command alias
 //
-bool CommandHandler::AddAlias(string alias, string commandName) {
+bool CommandHandler::AddAlias(std::string alias, std::string commandName) {
 
-	string aliasLowerCase = alias;
-	transform(aliasLowerCase.begin(), aliasLowerCase.end(), aliasLowerCase.begin(), ::tolower);
-	transform(commandName.begin(), commandName.end(), commandName.begin(), ::tolower);
+	std::string aliasLowerCase = alias;
+	std::transform(aliasLowerCase.begin(), aliasLowerCase.end(), aliasLowerCase.begin(), ::tolower);
+	std::transform(commandName.begin(), commandName.end(), commandName.begin(), ::tolower);
 
-	if(aliases.count(aliasLowerCase) <= 0) {
-		aliases.insert(pair<string, string>(aliasLowerCase, commandName));
-		aliasNames.insert(pair<string, string>(aliasLowerCase, alias));
+	if (aliases.count(aliasLowerCase) <= 0) {
+		aliases.insert(std::pair<std::string, std::string>(aliasLowerCase, commandName));
+		aliasNames.insert(std::pair<std::string, std::string>(aliasLowerCase, alias));
 		return true;
 	}
 
@@ -54,11 +58,11 @@ bool CommandHandler::AddAlias(string alias, string commandName) {
 //
 // Add command help text
 //
-bool CommandHandler::AddHelp(string commandName, string line) {
-	transform(commandName.begin(), commandName.end(), commandName.begin(), ::tolower);
+bool CommandHandler::AddHelp(std::string commandName, std::string line) {
+	std::transform(commandName.begin(), commandName.end(), commandName.begin(), ::tolower);
 	line.append("\n");
-	if(help.count(commandName) < 0) {
-		help.insert(pair<string, string>(commandName, line));
+	if (help.count(commandName) < 0) {
+		help.insert(std::pair<std::string, std::string>(commandName, line));
 	}
 	else {
 		help[commandName].append(line);
@@ -73,6 +77,7 @@ void CommandHandler::CreateCommands() {
 
 	CreateDeviceCommands();
 	CreateTabletCommands();
+	CreateAuxCommands();
 	CreateFilterCommands();
 	CreateOtherCommands();
 
@@ -81,12 +86,12 @@ void CommandHandler::CreateCommands() {
 //
 // Is valid command?
 //
-bool CommandHandler::IsValidCommand(string command) {
-	transform(command.begin(), command.end(), command.begin(), ::tolower);
-	if(aliases.count(command) > 0) {
+bool CommandHandler::IsValidCommand(std::string command) {
+	std::transform(command.begin(), command.end(), command.begin(), ::tolower);
+	if (aliases.count(command) > 0) {
 		command = aliases[command];
 	}
-	if(commands.count(command) > 0) {
+	if (commands.count(command) > 0) {
 		return true;
 	}
 	return false;
@@ -95,9 +100,14 @@ bool CommandHandler::IsValidCommand(string command) {
 //
 // Execute a command using command name
 //
-bool CommandHandler::ExecuteCommand(string command) {
+bool CommandHandler::ExecuteCommand(std::string command) {
 	return ExecuteCommand(command, NULL);
 }
+bool CommandHandler::ExecuteCommandLock(std::string command) {
+	std::unique_lock<std::mutex> mlock(lock);
+	return ExecuteCommand(command);
+}
+
 
 //
 // Execute a command using command line
@@ -105,59 +115,73 @@ bool CommandHandler::ExecuteCommand(string command) {
 bool CommandHandler::ExecuteCommand(CommandLine *cmd) {
 	return ExecuteCommand(cmd->command, cmd);
 }
+bool CommandHandler::ExecuteCommandLock(CommandLine *cmd) {
+	std::unique_lock<std::mutex> mlock(lock);
+	return ExecuteCommand(cmd);
+}
+
 
 //
 // Execute a command using command and parameter string
 //
-bool CommandHandler::ExecuteCommand(string command, string parameters) {
+bool CommandHandler::ExecuteCommand(std::string command, std::string parameters) {
 	CommandLine *cmd = new CommandLine(command + " " + parameters);
 	bool result = ExecuteCommand(command, cmd);
 	delete cmd;
 	return result;
 }
+bool CommandHandler::ExecuteCommandLock(std::string command, std::string parameters) {
+	std::unique_lock<std::mutex> mlock(lock);
+	return ExecuteCommand(command, parameters);
+}
+
 
 //
 // Execute a command
 //
-bool CommandHandler::ExecuteCommand(string command, CommandLine * cmd) {
-	transform(command.begin(), command.end(), command.begin(), ::tolower);
-	if(aliases.count(command) > 0) {
+bool CommandHandler::ExecuteCommand(std::string command, CommandLine * cmd) {
+	std::transform(command.begin(), command.end(), command.begin(), ::tolower);
+	if (aliases.count(command) > 0) {
 		command = aliases[command];
 	}
-	if(commands.count(command) > 0) {
+	if (commands.count(command) > 0) {
 		return commands[command]->Execute(cmd);
 	}
 	return false;
 }
+bool CommandHandler::ExecuteCommandLock(std::string command, CommandLine * cmd) {
+	std::unique_lock<std::mutex> mlock(lock);
+	return ExecuteCommand(command, cmd);
+}
+
 
 //
 // Execute commands from a file
 //
-bool CommandHandler::ExecuteFile(string filename) {
+bool CommandHandler::ExecuteFile(std::string filename) {
 
 	CommandLine *cmd;
-	ifstream file;
-	string line = "";
+	std::ifstream file;
+	std::string line = "";
 
 	// Open file
 	file.open(filename);
-	if(!file.is_open()) {
+	if (!file.is_open()) {
 		return false;
 	}
-
 
 	LOG_INFO("\\ Reading '%s'\n", filename.c_str());
 
 	// Loop through lines
-	while(!file.eof()) {
+	while (!file.eof()) {
 		getline(file, line);
-		if(line.length() == 0) continue;
+		if (line.length() == 0) continue;
 		cmd = new CommandLine(line);
 
 		//
 		// Do not redefine tablet if one is already open
 		//
-		if(
+		if (
 			(
 				cmd->is("Tablet")
 				||
@@ -168,7 +192,7 @@ bool CommandHandler::ExecuteFile(string filename) {
 			&&
 			tablet != NULL &&
 			tablet->IsConfigured()
-		) {
+			) {
 			LOG_INFO(">> %s\n", cmd->line.c_str());
 			LOG_INFO("Tablet is already defined!\n");
 			delete cmd;
@@ -176,7 +200,15 @@ bool CommandHandler::ExecuteFile(string filename) {
 		}
 		LOG_INFO(">> %s\n", cmd->line.c_str());
 
-		ExecuteCommand(cmd);
+		std::string command = cmd->command;
+		std::transform(command.begin(), command.end(), command.begin(), ::tolower);
+		if (aliases.count(command) > 0) {
+			command = aliases[command];
+		}
+		if (commands.count(command) > 0) {
+			commands[command]->Execute(cmd);
+		}
+		//ExecuteCommand(cmd);
 
 		delete cmd;
 	}
@@ -185,4 +217,10 @@ bool CommandHandler::ExecuteFile(string filename) {
 	LOG_INFO("/ End of '%s'\n", filename.c_str());
 
 	return true;
+}
+
+bool CommandHandler::ExecuteFileLock(std::string filename)
+{
+	std::unique_lock<std::mutex> mlock(lock);
+	return ExecuteFile(filename);
 }

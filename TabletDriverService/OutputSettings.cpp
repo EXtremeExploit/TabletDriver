@@ -1,11 +1,13 @@
-#include "stdafx.h"
+#include "precompiled.h"
 #include "OutputSettings.h"
 
 OutputSettings::OutputSettings() {
-	relativeSensitivity = 1;
+	relativeState.firstPosition = true;
+	relativeSensitivity.Set(1,1);
 	relativeResetDistance = 25;
 	relativeResetTime = 100;
-	ResetRelativeState(0, 0, chrono::high_resolution_clock::now());
+	relativeDragMove = false;
+	ResetRelativeState(0, 0, std::chrono::high_resolution_clock::now());
 }
 
 
@@ -13,7 +15,7 @@ OutputSettings::~OutputSettings() {
 }
 
 
-void OutputSettings::ResetRelativeState(double x, double y, chrono::high_resolution_clock::time_point time) {
+void OutputSettings::ResetRelativeState(double x, double y, std::chrono::high_resolution_clock::time_point time) {
 	relativeState.targetPosition.Set(x, y);
 	relativeState.lastPosition.Set(x, y);
 	relativeState.pixelPosition.x = (int)x;

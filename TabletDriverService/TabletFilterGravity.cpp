@@ -1,4 +1,4 @@
-#include "stdafx.h"
+#include "precompiled.h"
 #include "TabletFilterGravity.h"
 
 #define LOG_MODULE "Gravity"
@@ -31,9 +31,9 @@ void TabletFilterGravity::Update() {
 	double timeDelta = timerInterval / 1000.0;
 
 	//
-	// Only use this filter when mouse 1, 2 or 3 is down
+	// Only use this filter when buttons are down
 	//
-	if((outputState.buttons & 0x07) == 0) {
+	if((outputState.buttons & 0x1F) == 0) {
 		if(ignoreButton-- > 0) {
 		}
 		else {
@@ -99,7 +99,7 @@ void TabletFilterGravity::Update() {
 
 
 	// Debug message
-	if(logger.debugEnabled && distance > 0.0) {
+	if(logger.IsDebugOutputEnabled() && distance > 0.0) {
 		LOG_DEBUG("X=%0.2f Y=%0.2f DX=%0.2f DY=%0.2f VX=%0.2f VY=%0.2f\n",
 			outputPosition.x,
 			outputPosition.y,

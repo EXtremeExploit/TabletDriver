@@ -1,4 +1,4 @@
-#include "stdafx.h"
+#include "precompiled.h"
 #include "TabletFilterNoiseReduction.h"
 
 
@@ -14,7 +14,7 @@ TabletFilterNoiseReduction::TabletFilterNoiseReduction() {
 	distanceMaximum = 1;
 	iterations = 10;
 	reportRate = 1;
-	timeBegin = chrono::high_resolution_clock::now();
+	timeBegin = std::chrono::high_resolution_clock::now();
 	timeLastReport = timeBegin;
 	timeNow = timeBegin;
 	outputPosition = &outputState.position;
@@ -51,9 +51,6 @@ void TabletFilterNoiseReduction::Update() {
 	// Velocity calculation
 	double velocity = latestTarget.Distance(oldTarget) * reportRate;
 	oldTarget.Set(latestTarget);
-
-	
-
 
 	// One position in the buffer?
 	if(buffer.count == 1) {
@@ -102,7 +99,7 @@ void TabletFilterNoiseReduction::Update() {
 			}
 
 			// Debug message
-			if(logger.debugEnabled) {
+			if(logger.IsDebugOutputEnabled()) {
 				LOG_DEBUG("Threshold! D=%0.2f mm, R=%0.2f, V=%0.2f mm/s, V2=%0.2f mm/s\n",
 					distance,
 					distanceRatio,
@@ -115,7 +112,7 @@ void TabletFilterNoiseReduction::Update() {
 	}
 
 	// Debug message
-	if(logger.debugEnabled) {
+	if(logger.IsDebugOutputEnabled()) {
 		double distance = outputPosition->Distance(latestTarget);
 		double latency;
 		if(velocity <= 0) {

@@ -5,5 +5,5 @@
 /TabletDriverGUI/obj/
 /TabletDriverService/Release/
 /TabletDriverService/Debug/
-
-TabletDriverService/startuplog.txt
+/TabletDriverService/startuplog.txt
+TabletDriverService/config/usersettings.cfg

@@ -2,10 +2,11 @@
 
 #include "Output.h"
 #include "OutputVMultiAbsolute.h"
-#include "OutputVMultiAbsoluteV2.h"
 #include "OutputVMultiRelative.h"
 #include "OutputVMultiDigitizer.h"
+#include "OutputVMultiDigitizerRelative.h"
 #include "OutputSendInputAbsolute.h"
+#include "OutputSendInputRelative.h"
 #include "OutputDummy.h"
 
 class OutputManager : public Output {
@@ -13,9 +14,9 @@ public:
 
 	enum OutputMode {
 		ModeVMultiAbsolute,
-		ModeVMultiAbsoluteV2,
 		ModeVMultiRelative,
 		ModeVMultiDigitizer,
+		ModeVMultiDigitizerRelative,
 		ModeSendInputAbsolute,
 		ModeSendInputRelative,
 		ModeDummy
@@ -25,10 +26,11 @@ public:
 	Output *outputs[7];
 
 	OutputVMultiAbsolute vmultiAbsolute;
-	OutputVMultiAbsoluteV2 vmultiAbsoluteV2;
 	OutputVMultiRelative vmultiRelative;
 	OutputVMultiDigitizer vmultiDigitizer;
+	OutputVMultiDigitizerRelative vmultiDigitizerRelative;
 	OutputSendInputAbsolute sendInputAbsolute;
+	OutputSendInputRelative sendInputRelative;
 	OutputDummy dummy;
 
 	OutputMode mode;
@@ -38,6 +40,9 @@ public:
 	bool Set(TabletState *tabletState);
 	bool Write();
 	bool Reset();
+
+	bool GetRelativePositionDelta(TabletState *tabletState, Vector2D *delta);
+
 
 	OutputManager();
 	~OutputManager();

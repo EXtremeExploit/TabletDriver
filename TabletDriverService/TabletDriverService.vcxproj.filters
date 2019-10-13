@@ -15,9 +15,6 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="stdafx.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="targetver.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -90,9 +87,6 @@
     <ClInclude Include="OutputSendInputAbsolute.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="OutputVMultiAbsoluteV2.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="TabletMeasurement.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -117,11 +111,41 @@
     <ClInclude Include="CommandHandler.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="DataFormatter.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="InputEmulator.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="TabletFilterAdvancedSmoothing.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="OutputSendInputRelative.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="OutputVMultiDigitizerRelative.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="NamedPipeServer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="NamedPipeInput.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="NamedPipeState.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Runnable.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="BufferQueue.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="precompiled.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="stdafx.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="HIDDevice.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -194,9 +218,6 @@
     <ClCompile Include="OutputSendInputAbsolute.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="OutputVMultiAbsoluteV2.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="TabletMeasurement.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -233,6 +254,42 @@
     <ClCompile Include="CommandHandler.Tablet.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="DataFormatter.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="InputEmulator.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="CommandHandler.Auxiliary.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="TabletFilterAdvancedSmoothing.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="OutputSendInputRelative.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="OutputVMultiDigitizerRelative.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="NamedPipeServer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="NamedPipeInput.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="NamedPipeState.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Runnable.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="BufferQueue.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="precompiled.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="config\init.cfg">
@@ -247,9 +304,24 @@
     <None Include="config\wacom.cfg">
       <Filter>Resource Files</Filter>
     </None>
+    <None Include="config\serviceonly.cfg">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="tools\DisableWacomDrivers.bat">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="tools\EnableWacomDrivers.bat">
+      <Filter>Resource Files</Filter>
+    </None>
+    <None Include="tools\RunServiceOnly.bat">
+      <Filter>Resource Files</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <Text Include="docs\VMulti_Report_Descriptor.txt">
+      <Filter>Resource Files</Filter>
+    </Text>
+    <Text Include="docs\VEIKK_VMulti_Descriptor.txt">
       <Filter>Resource Files</Filter>
     </Text>
   </ItemGroup>

@@ -1,4 +1,4 @@
-#include "stdafx.h"
+#include "precompiled.h"
 #include "Logger.h"
 
 //
@@ -6,74 +6,118 @@
 //
 Logger::Logger() {
 	verbosity = LogLevelDebug;
-	newMessage = false;
 	directPrint = false;
-	debugEnabled = false;
+	isDebugOutputEnabled = false;
+	writeCallback = NULL;
 }
 
 
-void Logger::OutputMessage(LogItem *message) {
-	char timeBuffer[64];
-	char levelNameBuffer[128];
-	char moduleBuffer[128];
+void Logger::OutputItem(LogItem *item) {
 
+	char buffer[4096];
+	int bufferSize = 4096;
+	int index = 0;
 
-	int index = strftime(timeBuffer, 64, "[%Y-%m-%d %H:%M:%S", &message->time);
-	sprintf_s(timeBuffer + index, 64 - index, ".%03d] ", message->systemTime.wMilliseconds);
+	// Time
+	index += strftime(buffer + index, bufferSize - index, "[%Y-%m-%d %H:%M:%S", &item->time);
 
-	if(message->module.length() > 0) {
-		sprintf_s(moduleBuffer, "[%s] ", message->module.c_str());
-	}
-	else {
-		moduleBuffer[0] = 0;
-	}
+	// Milliseconds
+	if (index < bufferSize)
+		index += sprintf_s(buffer + index, bufferSize - index, ".%03d] ", item->systemTime.wMilliseconds);
 
-	if(message->level != LogLevelInfo) {
-		sprintf_s(levelNameBuffer, "[%s] ", levelNames[message->level].c_str());
-	}
-	else {
-		levelNameBuffer[0] = 0;
+	// Module
+	if (item->module.length() > 0) {
+		if (index < bufferSize)
+			index += sprintf_s(buffer + index, bufferSize - index, "[%s] ", item->module.c_str());
 	}
 
-
-	try {
-		cout << timeBuffer << levelNameBuffer << moduleBuffer << message->text << flush;
-	} catch(exception) {
-		exit(1);
+	// Log level
+	if (item->level != LogLevelInfo) {
+		if (index < bufferSize)
+			index += sprintf_s(buffer + index, bufferSize - index, "[%s] ", levelNames[item->level].c_str());
 	}
-	if(logFile && logFile.is_open()) {
-		logFile << timeBuffer << levelNameBuffer << moduleBuffer << message->text << flush;
-	}
-}
 
-//
-// Process messages
-//
-void Logger::ProcessMessages() {
+	// Message
+	if (index < bufferSize) {
 
-	// Lock message list
-	lockMessages.lock();
+		// Message to large for the buffer
+		if ((int)item->message.size() > bufferSize - index) {
+			memcpy(buffer + index, item->message.c_str(), (bufferSize - index) - 1);
+			index = bufferSize;
+		}
 
-	// Copy message list to a temporary list
-	vector<LogItem> tmp(messages);
-	messages.clear();
-
-	// Unlock message list
-	lockMessages.unlock();
-
-	// Loop through messages
-	for(auto message : tmp) {
-		if(!directPrint) {
-			OutputMessage(&message);
+		// Copy message to buffer
+		else
+		{
+			memcpy(buffer + index, item->message.c_str(), item->message.size());
+			index += item->message.size();
 		}
 	}
+
+	// Write to standard output
+	try {
+		std::cout.write(buffer, index);
+		std::cout.flush();
+	}
+	catch (std::exception) {
+	}
+
+	// Write to output pipe
+	try {
+		if (writeCallback != NULL) {
+			writeCallback(buffer, index);
+		}
+	}
+	catch (std::exception) {
+	}
+
+	// Write to log file
+	if (logFile && logFile.is_open()) {
+		logFile.write(buffer, index);
+		logFile.flush();
+	}
+}
+
+//
+// Process queue
+//
+void Logger::ProcessQueue() {
+
+	std::queue<LogItem*> temporaryQueue;
+
+	// Lock queue
+	lockQueue.lock();
+
+	// Loop through queue items and add to a temporary queue
+	while (!logQueue.empty()) {
+		LogItem *item = logQueue.front();
+		temporaryQueue.push(item);
+		logQueue.pop();
+	}
+
+	// Unlock queue
+	lockQueue.unlock();
+
+	// Process the temporary queue
+	while (!temporaryQueue.empty()) {
+		LogItem *item = temporaryQueue.front();
+
+		// Output log item
+		OutputItem(item);
+
+		// Destroy log item
+		delete item;
+
+		temporaryQueue.pop();
+	}
+
 }
 
 
 //
 // Log message
 //
-void Logger::LogMessage(int level, string module, const char *fmt, ...) {
+void Logger::LogMessage(int level, std::string module, const char *fmt, ...) {
 	char message[4096];
 	int maxLength = sizeof(message) - 1;
 	int index;
@@ -81,42 +125,42 @@ void Logger::LogMessage(int level, string module, const char *fmt, ...) {
 	message[0] = 0;
 
 	// Clamp level
-	if(level < 2)
+	if (level < 2)
 		level = 2;
-	else if(level > 8)
+	else if (level > 8)
 		level = 8;
 
-	if(level <= verbosity) {
+	if (level <= verbosity) {
 		index = 0;
 		time(&t);
 
 		// Loop through arguments
 		va_list ap;
 		va_start(ap, fmt);
-		if(index < maxLength) index += vsnprintf(message + index, maxLength - index, fmt, ap);
+		if (index < maxLength) index += vsnprintf(message + index, maxLength - index, fmt, ap);
 		va_end(ap);
 
 		// New line at the end when the message is larger than max length
-		if(index >= maxLength) {
+		if (index >= maxLength) {
 			message[maxLength - 1] = '\n';
 			message[maxLength] = 0;
 		}
 
 		// Add message
-		LogItem logItem;
-		localtime_s(&logItem.time, &t);
-		GetSystemTime(&logItem.systemTime);
-		logItem.level = level;
-		logItem.module = module;
-		logItem.text = message;
-		AddMessage(&logItem);
+		LogItem *logItem = new LogItem();
+		localtime_s(&logItem->time, &t);
+		GetSystemTime(&logItem->systemTime);
+		logItem->level = level;
+		logItem->module = module;
+		logItem->message = message;
+		AddQueue(logItem);
 	}
 }
 
 //
 // Log buffer data
 //
-void Logger::LogBuffer(int level, string module, void *buffer, int length, const char *fmt, ...) {
+void Logger::LogBuffer(int level, std::string module, void *buffer, int length, const char *fmt, ...) {
 	bool newLine = false;
 	char message[4096];
 	int maxLength = sizeof(message) - 1;
@@ -125,91 +169,129 @@ void Logger::LogBuffer(int level, string module, void *buffer, int length, const
 	message[0] = 0;
 
 	// Clamp level
-	if(level < 2)
+	if (level < 2)
 		level = 2;
-	else if(level > 8)
+	else if (level > 8)
 		level = 8;
 
-	if(level <= verbosity) {
+	if (level <= verbosity) {
 		index = 0;
 		time(&t);
 
 		// Loop through arguments
 		va_list ap;
 		va_start(ap, fmt);
-		if(index < maxLength) index += vsnprintf(message + index, maxLength - index, fmt, ap);
+		if (index < maxLength) index += vsnprintf(message + index, maxLength - index, fmt, ap);
 		va_end(ap);
 
 		// Detect new line
 		newLine = (fmt[strlen(fmt) - 1] == '\n');
-		if(newLine) {
-			if(index < maxLength) index += snprintf(message + index, maxLength - index, "  { ");
+		if (newLine) {
+			if (index < maxLength) index += snprintf(message + index, maxLength - index, "  { ");
 
 		}
 		else {
-			if(index < maxLength) index += snprintf(message + index, maxLength - index, "{ ");
+			if (index < maxLength) index += snprintf(message + index, maxLength - index, "{ ");
 		}
 
 
 		// Loop through buffer bytes
-		for(int i = 0; i < length; i++) {
+		for (int i = 0; i < length; i++) {
 
 			// Last byte
-			if(i == length - 1) {
-				if(index < maxLength) index += snprintf(message + index, maxLength - index, "0x%02x", ((unsigned char*)buffer)[i]);
+			if (i == length - 1) {
+				if (index < maxLength) index += snprintf(message + index, maxLength - index, "0x%02x", ((unsigned char*)buffer)[i]);
 
 				//
 			}
 			else {
-				if(index < maxLength) index += snprintf(message + index, maxLength - index, "0x%02x, ", ((unsigned char*)buffer)[i]);
+				if (index < maxLength) index += snprintf(message + index, maxLength - index, "0x%02x, ", ((unsigned char*)buffer)[i]);
 
 			}
 			// New line after every 12th byte
-			if(newLine && (i + 1) % 12 == 0 && i != length - 1) {
-				if(index < maxLength) index += snprintf(message + index, maxLength - index, "\n    ");
+			if (newLine && (i + 1) % 12 == 0 && i != length - 1) {
+				if (index < maxLength) index += snprintf(message + index, maxLength - index, "\n    ");
 			}
 		}
 
 		// Ending bracket
-		if(index < maxLength) index += snprintf(message + index, maxLength - index, " }\n");
+		if (index < maxLength) index += snprintf(message + index, maxLength - index, " }\n");
 
 		// New line at the end when the message is larger than max length
-		if(index >= maxLength) {
+		if (index >= maxLength) {
 			message[maxLength - 1] = '\n';
 			message[maxLength] = 0;
 		}
 
 		// Add message
-		LogItem logItem;
-		localtime_s(&logItem.time, &t);
-		GetSystemTime(&logItem.systemTime);
-		logItem.level = level;
-		logItem.module = module;
-		logItem.text = message;
-		AddMessage(&logItem);
+		LogItem *logItem = new LogItem();
+		localtime_s(&logItem->time, &t);
+		GetSystemTime(&logItem->systemTime);
+		logItem->level = level;
+		logItem->module = module;
+		logItem->message = message;
+		AddQueue(logItem);
 	}
 }
 
 //
-// Add message to list
+// Add item to queue
 //
-void Logger::AddMessage(LogItem *message) {
+void Logger::AddQueue(LogItem *item) {
+
+	if (!IsRunning()) return;
 
 	// Direct print (skips the message buffer)
-	if(directPrint) {
-		OutputMessage(message);
+	if (directPrint) {
+
+		// Output log item
+		OutputItem(item);
+
+		// Destroy log item
+		delete item;
+
+		return;
 	}
 
 	// Lock message list
-	lockMessages.lock();
+	lockQueue.lock();
 
 	// Add message
-	messages.push_back(*message);
+	logQueue.push(item);
 
 	// Unlock message list
-	lockMessages.unlock();
+	lockQueue.unlock();
 
-	newMessage = true;
+	// Notify new message
+	NotifyNewItem();
+
+}
+
+//
+// Notify new item
+//
+void Logger::NotifyNewItem()
+{
+	conditionNewItem.notify_all();
+}
+
+//
+// Wait for a new message
+//
+void Logger::WaitNewItem()
+{
+	std::unique_lock<std::mutex> mlock(lockNewItem);
+
+	// Check if the queue is empty
+	bool isQueueEmpty = false;
+	lockQueue.lock();
+	isQueueEmpty = logQueue.empty();
+	lockQueue.unlock();
+
+	// Wait for items if queue is empty
+	if (isQueueEmpty) {
+		conditionNewItem.wait(mlock);
+	}
 }
 
 
@@ -217,35 +299,31 @@ void Logger::AddMessage(LogItem *message) {
 // Logger thread
 //
 void Logger::run() {
-	while(true) {
 
-		// Wait for messages
-		if(newMessage) {
-
-			// Set new message flag to false
-			newMessage = false;
-
-			// Process messages
-			ProcessMessages();
-		}
+	while (true) {
 
 		// Shutdown the thread
-		if(!isRunning && !newMessage) break;
+		if (!IsRunning()) break;
 
-		// Sleep 10ms
-		Sleep(10);
+		// Wait for the new item
+		WaitNewItem();
+
+		// Process item queue
+		ProcessQueue();
 	}
+
+	printf("Logger thread exit!\n");
 }
 
 //
 // Open log file
 //
-bool Logger::OpenLogFile(string filename) {
-	if(logFile && logFile.is_open()) {
+bool Logger::OpenLogFile(std::string filename) {
+	if (logFile && logFile.is_open()) {
 		logFile.close();
 	}
-	logFile = ofstream(filename, ofstream::out);
-	if(!logFile) {
+	logFile = std::ofstream(filename, std::ofstream::out);
+	if (!logFile) {
 		return false;
 	}
 	logFilename = filename;
@@ -256,7 +334,7 @@ bool Logger::OpenLogFile(string filename) {
 // Close log file
 //
 bool Logger::CloseLogFile() {
-	if(logFile && logFile.is_open()) {
+	if (logFile && logFile.is_open()) {
 		logFile.close();
 		return true;
 	}
@@ -265,12 +343,37 @@ bool Logger::CloseLogFile() {
 
 
 //
+// Enable/disable debug output
+//
+void Logger::SetDebugOutput(bool enabled)
+{
+	lock.lock();
+	isDebugOutputEnabled = enabled;
+	lock.unlock();
+
+}
+
+//
+// Check if the debug output is enabled
+//
+bool Logger::IsDebugOutputEnabled()
+{
+	bool enabled = false;
+	lock.lock();
+	enabled = isDebugOutputEnabled;
+	lock.unlock();
+	return enabled;
+}
+
+
+
+//
 // Start logger thread
 //
 void Logger::Start() {
-	if(!isRunning) {
-		isRunning = true;
-		threadLog = thread([this] { this->run(); });
+	if (!IsRunning()) {
+		SetRunningState(true);
+		threadLog = std::thread([this] { this->run(); });
 	}
 }
 
@@ -278,11 +381,21 @@ void Logger::Start() {
 // Stop logger thread
 //
 void Logger::Stop() {
-	if(isRunning) {
-		isRunning = false;
-		newMessage = true;
-		threadLog.join();
-		if(logFile && logFile.is_open()) {
+	if (IsRunning()) {
+		SetRunningState(false);
+
+		NotifyNewItem();
+
+		printf("Logger thread join\n");
+		try {
+			threadLog.join();
+		}
+		catch (std::exception &e) {
+			printf("Logger thread join exception: %s\n", e.what());
+		}
+
+		ProcessQueue();
+		if (logFile && logFile.is_open()) {
 			logFile.close();
 		}
 	}

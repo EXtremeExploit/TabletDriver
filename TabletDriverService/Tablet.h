@@ -2,20 +2,23 @@
 
 #include <string>
 #include <vector>
+#include <map>
+#include <atomic>
+#include <mutex>
+#include <condition_variable>
 
 #include "USBDevice.h"
 #include "HIDDevice.h"
 #include "TabletSettings.h"
 #include "TabletState.h"
 #include "TabletFilterSmoothing.h"
+#include "TabletFilterAdvancedSmoothing.h"
+#include "TabletFilterGravity.h"
 #include "TabletFilterNoiseReduction.h"
 #include "TabletFilterAntiSmoothing.h"
 #include "TabletFilterPeak.h"
-#include "TabletFilterGravity.h"
 #include "TabletMeasurement.h"
-#include "Vector2D.h"
-
-using namespace std;
+#include "DataFormatter.h"
 
 class Tablet {
 public:
@@ -24,52 +27,142 @@ public:
 	HIDDevice *hidDeviceAux;
 	int usbPipeId;
 
-	//
-	// Enums
-	//
-	enum TabletButtons {
-		Button1, Button2, Button3, Button4,
-		Button5, Button6, Button7, Button8
-	};
-
-	// Tablet report state
-	enum TabletReportState {
+	// Tablet report status
+	enum TabletReportStatus {
 		ReportPositionInvalid = 0,
 		ReportValid = 1,
 		ReportInvalid = 2,
 		ReportIgnore = 3
 	};
 
+	// Tablet auxiliary report status
+	enum TabletAuxReportStatus {
+		AuxReportValid = 0,
+		AuxReportInvalid = 1,
+		AuxReportIgnore = 2,
+		AuxReportReadError = 3
+	};
+
+
 	//
-	// Position report data
+	// Tablet report data
 	//
 #pragma pack(1)
 	struct {
 		BYTE reportId;
-		BYTE buttons;
-		USHORT x;
-		USHORT y;
+		UINT32 buttons;
+		UINT32 x;
+		UINT32 y;
 		USHORT pressure;
+		USHORT height;
 	} reportData;
 
+	// Tablet report byte names
+	const std::map<std::string, int> reportByteNames = {
+
+		// Report id
+		{"reportid", 0},
+
+		// Buttons
+		{"buttons", 1},
+		{"buttonsbyte1", 1},
+		{"buttonsbyte2", 2},
+		{"buttonsbyte3", 3},
+		{"buttonsbyte4", 4},
+
+		// X position
+		{"xlow", 5},
+		{"xhigh", 6},
+		{"xbyte1", 5},
+		{"xbyte2", 6},
+		{"xbyte3", 7},
+		{"xbyte4", 8},
+
+		// Y position
+		{"ylow", 9},
+		{"yhigh", 10},
+		{"ybyte1", 9},
+		{"ybyte2", 10},
+		{"ybyte3", 11},
+		{"ybyte4", 12},
+
+		// Pressure
+		{"pressurelow", 13},
+		{"pressurehigh", 14},
+
+		// Height
+		{"heightlow", 15},
+		{"heighthigh", 16}
+	};
+
+
 	//
+	// Auxiliary report data
+	//
+#pragma pack(1)
+	struct {
+		BYTE reportId;
+		UINT32 buttons;
+		UCHAR detect;
+		UCHAR isPressed;
+	} auxReportData;
+
+	// Auxiliary report byte names
+	const std::map<std::string, int> auxReportByteNames = {
+
+		// Report id
+		{ "reportid", 0 },
+
+		// Buttons
+		{ "buttonslow", 1 },
+		{ "buttonshigh", 2 },
+		{ "buttonsbyte1", 1 },
+		{ "buttonsbyte2", 2 },
+		{ "buttonsbyte3", 3 },
+		{ "buttonsbyte4", 4 },
+
+		// Detect byte
+		{ "detect", 5 },
+
+		// Is button pressed byte
+		{ "ispressed", 6 }
+	};
+
+
+	class InitReport {
+	public:
+		BYTE *data = NULL;
+		int length = 0;
+		InitReport(int length);
+		~InitReport();
+	};
+
+	class TabletAuxState {
+	public:
+		bool isValid;
+		bool isHandled;
+		USHORT buttons;
+		USHORT lastButtons;
+	};
+	TabletAuxState auxState;
+	std::mutex lockAuxState;
+	std::condition_variable conditionAuxState;
+
+
+	// Data formatter
+	DataFormatter dataFormatter;
+
 	// Tablet State
-	//
 	TabletState state;
 
 	// Settings
 	TabletSettings settings;
 
-	// Smoothing filter
+	// Filters
 	TabletFilterSmoothing smoothing;
-
-	// Noise reduction filter
+	TabletFilterAdvancedSmoothing advancedSmoothing;
 	TabletFilterNoiseReduction noiseFilter;
-
-	// Anti-smoothing filter
 	TabletFilterAntiSmoothing antiSmoothing;
-
-	// Gravity filter
 	TabletFilterGravity gravityFilter;
 
 	// Timed filters
@@ -83,27 +176,21 @@ public:
 	// Measurement
 	TabletMeasurement measurement;
 
-	// Button map
-	BYTE buttonMap[16];
-
 	//
-	string name = "Unknown";
-	bool isOpen;
+	std::string name = "Unknown";
+	std::atomic<bool> isOpen;
 	int skipReports;
 
 	// Pen tip button keep down
 	int tipDownCounter;
 
-	// Tablet initialize buffers
-	BYTE *initFeature;
-	int initFeatureLength;
-	BYTE *initReport;
-	int initReportLength;
-	vector<int> initStrings;
+	// Tablet initialization buffers
+	std::vector<InitReport*> initFeatureReports;
+	std::vector<InitReport*> initOutputReports;
+	std::vector<int> initStrings;
 
-
-
-	Tablet(string usbGUID);
+	Tablet(std::string usbGUID);
+	Tablet(USHORT vendorId, USHORT productId, USHORT usagePage, USHORT usage, bool isExclusive);
 	Tablet(USHORT vendorId, USHORT productId, USHORT usagePage, USHORT usage);
 	Tablet();
 	~Tablet();
@@ -111,10 +198,15 @@ public:
 	bool Init();
 	bool IsConfigured();
 
-	string GetDeviceString(UCHAR stringId);
-	int ReadPosition();
+	std::string GetDeviceString(UCHAR stringId);
+	std::string GetDeviceManufacturerName();
+	std::string GetDeviceProductName();
+	std::string GetDeviceSerialNumber();
+	int ReadState();
 	bool Write(void *buffer, int length);
 	bool Read(void *buffer, int length);
+	int ProcessAuxData(void *buffer, int length);
+	int ReadAuxReport();
 	void CloseDevice();
 
 };

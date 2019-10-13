@@ -1,19 +1,14 @@
-﻿using Microsoft.Win32;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Interop;
-using System.Windows.Media;
-using System.Windows.Shapes;
-using System.Windows.Threading;
 
 namespace TabletDriverGUI
 {
@@ -26,6 +21,8 @@ namespace TabletDriverGUI
         private void ConsoleBufferToText()
         {
             StringBuilder stringBuilder = new StringBuilder();
+
+            if (driver == null) return;
 
             // Lock console
             driver.ConsoleLock();
@@ -117,7 +114,7 @@ namespace TabletDriverGUI
             }
             catch (Exception e)
             {
-                driver.ConsoleAddText("Error! " + e.Message);
+                driver.ConsoleAddLine("Error! " + e.Message);
             }
         }
 
@@ -127,7 +124,12 @@ namespace TabletDriverGUI
         //
         private void TimerConsoleUpdate_Tick(object sender, EventArgs e)
         {
-            ConsoleBufferToText();
+            
+            // Update console text if console tab is active
+            if (tabControl.SelectedItem == tabConsole && WindowState != WindowState.Minimized)
+            {
+                ConsoleBufferToText();
+            }
         }
 
 
@@ -139,7 +141,7 @@ namespace TabletDriverGUI
             if (e.Key == Key.Enter)
             {
                 string line = textConsoleInput.Text;
-                ConsoleSendCommand(line);
+                ConsoleSendCommand(line.Trim());
             }
         }
 
@@ -153,15 +155,27 @@ namespace TabletDriverGUI
             //
             // Command tab complete
             //
-            if (e.Key == Key.Tab)
+            if (e.Key == Key.Tab
+                ||
+                (e.Key == Key.Space && e.KeyboardDevice.Modifiers == ModifierKeys.Control)
+            )
             {
+                string fill;
                 string inputText = textConsoleInput.Text.Trim().ToLower();
-                string fill = driver.CompleteCommandName(inputText, true);
-                if (fill != inputText)
+                if (inputText.StartsWith("help "))
                 {
-                    textConsoleInput.Text = fill;
-                    textConsoleInput.CaretIndex = textConsoleInput.Text.Length;
+                    fill = driver.CompleteCommandName(inputText.Substring(5), true);
+                    if (fill != null)
+                        textConsoleInput.Text = "Help " + fill;
                 }
+                else
+                {
+                    fill = driver.CompleteCommandName(inputText, true);
+                    if (fill != null)
+                        textConsoleInput.Text = fill;
+                }
+                if (fill != null)
+                    textConsoleInput.CaretIndex = textConsoleInput.Text.Length;
                 ConsoleBufferToText();
                 e.Handled = true;
             }
@@ -259,9 +273,53 @@ namespace TabletDriverGUI
                 string newText = text;
 
                 // Set selected text as completed command name
-                if (completedCommand != commandName)
+                if (completedCommand != null)
                 {
+
+                    //
+                    // Close old tool tip
+                    //
+                    if (textBoxSender.ToolTip != null)
+                    {
+                        ((ToolTip)textBoxSender.ToolTip).IsOpen = false;
+                        ((ToolTip)textBoxSender.ToolTip).IsEnabled = false;
+                    }
                     textBoxSender.SelectedText = completedCommand;
+
+                    // Find commands
+                    string foundCommands = "Commands:\n";
+                    int commandCount = 1;
+                    foreach (var command in driver.Commands)
+                    {
+                        if (command.Key.ToLower().StartsWith(completedCommand.ToLower()))
+                        {
+                            foundCommands += command.Value + " ";
+                            if (commandCount % 10 == 0) foundCommands += "\n";
+                        }
+
+                        commandCount++;
+                    }
+
+                    //
+                    // Create tool tip
+                    //
+                    ToolTip toolTip = new ToolTip
+                    {
+                        Placement = System.Windows.Controls.Primitives.PlacementMode.Relative,
+                        PlacementTarget = textBoxSender,
+                        HorizontalOffset = 100
+                    };
+                    toolTip.Opened += async delegate (object obj1, RoutedEventArgs eventArgs1)
+                    {
+                        toolTip.Content = foundCommands;
+                        await Task.Delay(3000);
+                        toolTip.IsOpen = false;
+                        toolTip.IsEnabled = false;
+                        textBoxSender.ToolTip = null;
+                    };
+                    toolTip.IsOpen = true;
+                    textBoxSender.ToolTip = toolTip;
+
                 }
 
                 // Set cursor position

@@ -1,4 +1,4 @@
-#include "stdafx.h"
+#include "precompiled.h"
 #include "OutputVMultiDigitizer.h"
 
 #define LOG_MODULE "VMultiDigitizer"
@@ -10,12 +10,26 @@
 //
 OutputVMultiDigitizer::OutputVMultiDigitizer() {
 
-	// VMulti digitizer report
-	report.vmultiId = 0x40;
+	// Digitizer VMulti report
 	report.reportLength = 8;
-	report.reportId = 5;
 	report.buttons = 0;
+	report.x = 0;
+	report.y = 0;
 	report.pressure = 0;
+
+	// XP-Pen
+	if(vmulti->type == VMulti::TypeXPPen) {
+		report.vmultiId = 0x40;
+		report.reportId = 5;
+		maxPressure = 2047.0;
+	}
+
+	// VEIKK
+	else if(vmulti->type == VMulti::TypeVEIKK) {
+		report.vmultiId = 0x09;
+		report.reportId = 2;
+		maxPressure = 8191.0;
+	}
 
 }
 
@@ -36,16 +50,19 @@ bool OutputVMultiDigitizer::Set(TabletState *tabletState) {
 	double y = tabletState->position.y;
 
 	// Map position to virtual screen (values between 0 and 1)
-	mapper->GetScreenPosition(&x, &y);
+	bool mapValid = mapper->GetScreenPosition(&x, &y);
+	if(!mapValid) {
+		return false;
+	}
 
 	// Offset coordinates by one pixel
-	double offsetX = -(32767.0 / mapper->areaVirtualScreen.width);
-	double offsetY = -(32767.0 / mapper->areaVirtualScreen.height);
+	double offsetX = -(32767.0 / mapper->virtualScreen.width);
+	double offsetY = -(32767.0 / mapper->virtualScreen.height);
 
 	report.buttons = tabletState->buttons | 0x20;
 	report.x = (USHORT)round(x * 32767.0 + offsetX);
 	report.y = (USHORT)round(y * 32767.0 + offsetY);
-	report.pressure = (USHORT)round(tabletState->pressure * 2047.0);
+	report.pressure = (USHORT)round(tabletState->pressure * maxPressure);
 	vmulti->SetReport(&report, sizeof(report));
 
 	return true;
@@ -61,7 +78,7 @@ bool OutputVMultiDigitizer::Write() {
 	if(vmulti->HasReportChanged()) {
 
 		// Debug message
-		if(logger.debugEnabled) {
+		if(logger.IsDebugOutputEnabled()) {
 			LOG_DEBUGBUFFER(&report, 10, "Report: ");
 		}
 
